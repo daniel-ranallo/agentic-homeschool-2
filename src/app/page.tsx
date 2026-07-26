@@ -212,7 +212,14 @@ export default function Home() {
       <div className="container mx-auto px-4 py-6">
         {selectedCourse ? (
           <>
-            <Breadcrumb course={selectedCourse} />
+            <Breadcrumb
+              course={selectedCourse}
+              onNavigate={(courseId) => {
+                if (courseId === null) {
+                  setSelectedCourse(null);
+                }
+              }}
+            />
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
               <ChatPanel courseId={selectedCourse.id} threadId={selectedCourse.threadId} />
               <div className="space-y-4">
