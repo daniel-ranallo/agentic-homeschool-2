@@ -2,7 +2,11 @@
 
 import { ChevronRight, Home } from "lucide-react";
 import { NodeType } from "@/lib/langgraph/state";
+import { NODE_TYPE_LABELS, NODE_TYPE_ICONS } from "@/lib/workflow-config";
 
+/**
+ * Course node within the course hierarchy.
+ */
 interface CourseNode {
   id: string;
   type: NodeType;
@@ -10,35 +14,34 @@ interface CourseNode {
   status: "DRAFTING" | "IN_REVIEW" | "LOCKED";
 }
 
+/**
+ * Course with its associated nodes.
+ */
 interface Course {
   id: string;
   title: string;
   nodes: CourseNode[];
 }
 
+/**
+ * Props for the Breadcrumb component.
+ */
 interface BreadcrumbProps {
+  /** Course to display in the breadcrumb */
   course: Course;
+  /** Callback when navigating to home or course */
   onNavigate?: (courseId: string | null) => void;
 }
 
-const nodeTypeLabels: Record<NodeType, string> = {
-  COURSE: "Course",
-  GOAL: "Learning Outcomes",
-  ASSESSMENT: "Assessment",
-  MODULE: "Module",
-  LESSON: "Lesson",
-};
-
-const nodeTypeIcons: Record<NodeType, string> = {
-  COURSE: "📚",
-  GOAL: "🎯",
-  ASSESSMENT: "📝",
-  MODULE: "📖",
-  LESSON: "📋",
-};
-
 type BreadcrumbItemType = "home" | "course" | NodeType;
 
+/**
+ * Displays a navigation breadcrumb showing the current course context.
+ * Shows the path from home through the course and any locked nodes.
+ *
+ * @param course - The course to display
+ * @param onNavigate - Callback for navigation events
+ */
 export function Breadcrumb({ course, onNavigate }: BreadcrumbProps) {
   // Build breadcrumb path from course nodes
   const breadcrumbs: Array<{ type: BreadcrumbItemType; label: string; icon: string | React.ReactNode }> = [
@@ -60,7 +63,7 @@ export function Breadcrumb({ course, onNavigate }: BreadcrumbProps) {
       breadcrumbs.push({
         type: node.type,
         label: node.title,
-        icon: nodeTypeIcons[node.type],
+        icon: NODE_TYPE_ICONS[node.type],
       });
     }
   });

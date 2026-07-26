@@ -2,6 +2,10 @@
 
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 
+/**
+ * Scope awareness widget that explains the parallel branch scope model.
+ * Used during module and lesson generation to remind users about scope boundaries.
+ */
 export function ScopeWidget() {
   return (
     <div className="border rounded-lg bg-card p-4">

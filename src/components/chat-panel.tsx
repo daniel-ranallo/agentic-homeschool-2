@@ -2,7 +2,11 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Send, Loader2 } from "lucide-react";
+import { useSSEStream, StreamMessage } from "@/lib/hooks/use-sse-stream";
 
+/**
+ * Chat message in the conversation history.
+ */
 interface Message {
   id: string;
   role: "user" | "assistant" | "system";
@@ -10,16 +14,28 @@ interface Message {
   timestamp: Date;
 }
 
+/**
+ * Props for the ChatPanel component.
+ */
 interface ChatPanelProps {
+  /** Course ID for context */
   courseId: string;
+  /** Workflow thread ID for the conversation */
   threadId: string;
 }
 
+/**
+ * Interactive chat panel for providing feedback and receiving AI responses.
+ * Supports streaming responses from the workflow API.
+ *
+ * @param courseId - Course identifier
+ * @param threadId - Workflow thread identifier
+ */
 export function ChatPanel({ courseId, threadId }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const { isLoading, streamRequest } = useSSEStream();
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -42,11 +58,12 @@ export function ChatPanel({ courseId, threadId }: ChatPanelProps) {
 
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
-    setIsLoading(true);
 
-    try {
-      // Send to graph API
-      const res = await fetch("/api/graph", {
+    let assistantContent = "";
+
+    await streamRequest(
+      "/api/graph",
+      {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -54,59 +71,30 @@ export function ChatPanel({ courseId, threadId }: ChatPanelProps) {
           userFeedback: input,
           isResume: true,
         }),
-      });
-
-      if (!res.body) throw new Error("No response body");
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let assistantContent = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n");
-
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.messages && data.messages.length > 0) {
-                const lastMsg = data.messages[data.messages.length - 1];
-                if (lastMsg.content) {
-                  assistantContent = lastMsg.content;
-                }
-              }
-            } catch (e) {
-              // Ignore
-            }
+      },
+      (data: StreamMessage) => {
+        if (data.messages && data.messages.length > 0) {
+          const lastMsg = data.messages[data.messages.length - 1];
+          if (lastMsg.content) {
+            assistantContent = lastMsg.content;
           }
         }
+      },
+      (error) => {
+        console.error("Chat error:", error);
+      },
+      () => {
+        if (assistantContent) {
+          const assistantMessage: Message = {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: assistantContent,
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, assistantMessage]);
+        }
       }
-
-      if (assistantContent) {
-        const assistantMessage: Message = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: assistantContent,
-          timestamp: new Date(),
-        };
-        setMessages((prev) => [...prev, assistantMessage]);
-      }
-    } catch (error) {
-      console.error("Chat error:", error);
-      const errorMessage: Message = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: "Sorry, I encountered an error. Please try again.",
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
-    } finally {
-      setIsLoading(false);
-    }
+    );
   }
 
   return (

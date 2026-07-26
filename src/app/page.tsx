@@ -1,24 +1,39 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { Breadcrumb } from "@/components/breadcrumb";
 import { ChatPanel } from "@/components/chat-panel";
 import { DocumentPreview } from "@/components/document-preview";
 import { ScopeWidget } from "@/components/scope-widget";
+import { CourseSettingsDropdown } from "@/components/course-settings-dropdown";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Loader2, Plus, BookOpen } from "lucide-react";
 
+/**
+ * Node processing status.
+ */
 type NodeStatus = "DRAFTING" | "IN_REVIEW" | "LOCKED";
+
+/**
+ * Types of nodes in the course design hierarchy.
+ */
 type NodeType = "COURSE" | "GOAL" | "ASSESSMENT" | "MODULE" | "LESSON";
 
+/**
+ * Course node in the hierarchy.
+ */
 interface CourseNode {
   id: string;
   type: NodeType;
   title: string;
-  content: any;
+  content: unknown;
   status: NodeStatus;
   children: CourseNode[];
 }
 
+/**
+ * Course with full context.
+ */
 interface Course {
   id: string;
   title: string;
@@ -28,6 +43,10 @@ interface Course {
   threadId: string;
 }
 
+/**
+ * Home page - Main workbench interface for course design.
+ * Provides split-screen layout with chat on the left and document preview on the right.
+ */
 export default function Home() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedCourse, setSelectedCourse] = useState<Course | null>(null);
@@ -37,6 +56,8 @@ export default function Home() {
   const [newCourseTitle, setNewCourseTitle] = useState("");
   const [newCourseGrade, setNewCourseGrade] = useState("");
   const [newCourseSkills, setNewCourseSkills] = useState("");
+  const [courseToDelete, setCourseToDelete] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Fetch courses on mount
   useEffect(() => {
@@ -78,6 +99,34 @@ export default function Home() {
       console.error("Failed to create course:", error);
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function deleteCourse(courseId: string) {
+    try {
+      setIsDeleting(true);
+      const res = await fetch(`/api/courses/${courseId}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Failed to delete course");
+      }
+
+      // Remove deleted course from list
+      setCourses(courses.filter((c) => c.id !== courseId));
+
+      // Deselect if currently selected
+      if (selectedCourse?.id === courseId) {
+        setSelectedCourse(null);
+      }
+    } catch (error) {
+      console.error("Failed to delete course:", error);
+      alert(error instanceof Error ? error.message : "Failed to delete course");
+    } finally {
+      setIsDeleting(false);
+      setCourseToDelete(null);
     }
   }
 
@@ -243,10 +292,18 @@ export default function Home() {
                   <div
                     key={course.id}
                     onClick={() => setSelectedCourse(course)}
-                    className="p-4 border rounded-lg cursor-pointer hover:bg-card/50 transition-colors"
+                    className="p-4 border rounded-lg cursor-pointer hover:bg-card/50 transition-colors relative"
                   >
-                    <h3 className="font-semibold mb-1">{course.title}</h3>
-                    <p className="text-sm text-muted-foreground">{course.gradeLevel}</p>
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <h3 className="font-semibold mb-1">{course.title}</h3>
+                        <p className="text-sm text-muted-foreground">{course.gradeLevel}</p>
+                      </div>
+                      <CourseSettingsDropdown
+                        courseId={course.id}
+                        onDelete={setCourseToDelete}
+                      />
+                    </div>
                   </div>
                 ))}
               </div>
@@ -254,6 +311,19 @@ export default function Home() {
           </div>
         )}
       </div>
+
+      {/* Confirm Delete Dialog */}
+      <ConfirmDialog
+        isOpen={!!courseToDelete}
+        title="Delete Course"
+        message={`Are you sure you want to delete "${
+          courses.find((c) => c.id === courseToDelete)?.title
+        }"? This action cannot be undone and will delete all associated content.`}
+        confirmText="Delete"
+        confirmVariant="destructive"
+        onConfirm={() => deleteCourse(courseToDelete!)}
+        onCancel={() => setCourseToDelete(null)}
+      />
     </div>
   );
 }

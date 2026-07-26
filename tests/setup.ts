@@ -5,6 +5,23 @@
 
 import '@testing-library/jest-dom';
 
+// Add fetch API polyfill for testing Next.js API routes
+// jsdom doesn't include fetch API by default
+const { Request, Response, Headers, FormData } = require('node-fetch');
+global.Request = Request;
+global.Response = Response;
+global.Headers = Headers;
+global.FormData = FormData;
+
+// Add TextEncoder/TextDecoder polyfill for packages that require it
+const { TextEncoder, TextDecoder } = require('util');
+global.TextEncoder = TextEncoder;
+global.TextDecoder = TextDecoder;
+
+// Add ReadableStream polyfill for langchain packages
+const { ReadableStream } = require('stream/web');
+global.ReadableStream = ReadableStream;
+
 // Mock next/router for Next.js components
 jest.mock('next/router', () => ({
   useRouter: () => ({

@@ -1,6 +1,11 @@
 /**
  * Initialize LangGraph checkpoint tables in PostgreSQL
- * Run this script once to create the required tables for PostgresSaver
+ *
+ * Run this script once to create the required tables for PostgresSaver.
+ * The checkpoint tables enable workflow state persistence and resumption
+ * for the LangGraph course design workflow.
+ *
+ * Usage: npm run db:init-checkpoints
  */
 
 import 'dotenv/config';
