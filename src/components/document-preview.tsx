@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Lock, Edit2, ChevronRight } from "lucide-react";
+import { Check, Lock, Edit2, ChevronRight, BookOpen, Target, FileText, Layers } from "lucide-react";
 import { NodeStatus, NodeType, WorkflowPhase, CLO, Assessment, Module, LessonPlan } from "@/lib/langgraph/state";
 import { WORKFLOW_PHASES, getPhaseConfig } from "@/lib/workflow-config";
 
@@ -54,7 +54,7 @@ export function DocumentPreview({ course }: DocumentPreviewProps) {
         <div>
           <h2 className="text-lg font-semibold">Course Structure</h2>
           <p className="text-sm text-muted-foreground">
-            Working on: <span className="font-medium text-primary">{phases.find(p => p.key === currentPhase)?.title}</span>
+            Working on: <span className="font-medium text-primary">{WORKFLOW_PHASES.find(p => p.key === currentPhase)?.title}</span>
           </p>
         </div>
         <button
