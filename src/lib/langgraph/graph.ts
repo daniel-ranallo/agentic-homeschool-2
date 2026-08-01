@@ -1,6 +1,13 @@
 /**
  * LangGraph Workflow Assembly
- * Combines all nodes into a complete course design workflow
+ *
+ * Combines all nodes into a complete course design workflow using LangGraph's
+ * state machine. The workflow implements Backward Design methodology with
+ * human-in-the-loop approval at each stage.
+ *
+ * Workflow Flow:
+ * 1. generateGoalsNode → 2. generateAssessmentsNode → 3. generateModulesNode (parallel)
+ *    → 4. generateLessonsNode (parallel) → 5. synthesisNode → END
  */
 
 import { StateGraph, END, Send } from "@langchain/langgraph";
@@ -15,26 +22,36 @@ import {
   generateLessonsNode,
   synthesisNode,
 } from "./nodes";
+import { allParentsHaveApprovedChildren, createWorkflowConfig as createConfig } from "./workflow-helpers";
 
-// Database pool for PostgresSaver
+/**
+ * Database connection pool for PostgresSaver checkpointing.
+ * Reuses connections for efficiency.
+ */
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 
+/**
+ * LangGraph checkpointer for persisting workflow state.
+ * Enables workflow resumption after interruptions or failures.
+ */
 export const checkpointer = new PostgresSaver(pool);
 
 /**
- * Conditional edge to determine next phase
+ * Determines the next workflow phase based on current state.
+ * Used for conditional routing after goals generation.
+ *
+ * @param state - Current workflow state
+ * @returns Next node name or END
  */
 function determineNextPhase(state: CourseDesignState): string {
   switch (state.currentPhase) {
     case "goals":
       return "generateAssessmentsNode";
     case "assessments":
-      // Fan-out to modules for each assessment
       return "fanoutModules";
     case "modules":
-      // Fan-out to lessons for each module
       return "fanoutLessons";
     case "lessons":
       return "synthesisNode";
@@ -45,96 +62,109 @@ function determineNextPhase(state: CourseDesignState): string {
   }
 }
 
-/**
- * Check if all assessments have locked modules
- */
-function allAssessmentsHaveLockedModules(state: CourseDesignState): boolean {
-  return state.assessments.every(assessment =>
-    state.modules.some(m => m.assessmentId === assessment.id && m.approved)
-  );
-}
+// Re-exported from workflow-helpers for backward compatibility
+const allAssessmentsHaveLockedModules = (state: CourseDesignState) =>
+  allParentsHaveApprovedChildren(state, "assessmentId", state.modules);
+
+const allModulesHaveLockedLessons = (state: CourseDesignState) =>
+  allParentsHaveApprovedChildren(state, "moduleId", state.dailyLessons);
 
 /**
- * Check if all modules have locked lessons
+ * Creates and configures the complete course design workflow.
+ *
+ * The workflow uses a state machine pattern with:
+ * - Sequential phases for goals and assessments
+ * - Parallel fan-out for modules (one per assessment)
+ * - Parallel fan-out for lessons (one per module)
+ * - Global synthesis at the end
  */
-function allModulesHaveLockedLessons(state: CourseDesignState): boolean {
-  return state.modules.every(module =>
-    state.dailyLessons.some(l => l.moduleId === module.id && l.approved)
-  );
-}
-
-// Build the workflow
 const workflow = new StateGraph(CourseDesignAnnotation)
   // Phase 1: Course Title & Goals
   .addNode("generateGoalsNode", generateGoalsNode)
   .addNode("generateAssessmentsNode", generateAssessmentsNode)
 
   // Phase 3: Modules (parallel per assessment)
-  .addNode("generateModulesNode", async (state, config) => {
-    // config contains assessmentId
-    return generateModulesNode(state, config as { assessmentId: string });
-  })
+  .addNode("generateModulesNode", async (state, config) =>
+    generateModulesNode(state, config as { assessmentId: string })
+  )
 
   // Phase 4: Lessons (parallel per module)
-  .addNode("generateLessonsNode", async (state, config) => {
-    // config contains moduleId
-    return generateLessonsNode(state, config as { moduleId: string });
-  })
+  .addNode("generateLessonsNode", async (state, config) =>
+    generateLessonsNode(state, config as { moduleId: string })
+  )
 
-  // Phase 5: Synthesis
+  // Phase 5: Global Synthesis
   .addNode("synthesisNode", synthesisNode)
 
-  // Entry point
+  // Entry point: Start with goals generation
   .addEdge("__start__", "generateGoalsNode")
 
-  // Conditional edges based on phase
+  // Conditional edge: Determine next phase after goals
   .addConditionalEdges("generateGoalsNode", determineNextPhase)
-  .addConditionalEdges("generateAssessmentsNode", (state) => {
-    // Fan-out to modules for each assessment using Send
-    const sends = state.assessments.map(assessment =>
-      new Send("generateModulesNode", { ...state, currentPhase: "modules" as const, assessmentId: assessment.id })
-    );
-    return sends;
-  })
+
+  // Fan-out: Create modules for each assessment (parallel)
+  .addConditionalEdges("generateAssessmentsNode", (state) =>
+    state.assessments.map(assessment =>
+      new Send("generateModulesNode", {
+        ...state,
+        currentPhase: "modules" as const,
+        assessmentId: assessment.id,
+      })
+    )
+  )
+
+  // After modules: Check if ready for lessons or stay in modules
   .addConditionalEdges("generateModulesNode", (state) => {
-    // After modules, check if we should fan out to lessons or wait for all modules
     if (allAssessmentsHaveLockedModules(state as CourseDesignState)) {
-      const sends = state.modules.map(module =>
-        new Send("generateLessonsNode", { ...state, currentPhase: "lessons" as const, moduleId: module.id })
+      return state.modules.map(module =>
+        new Send("generateLessonsNode", {
+          ...state,
+          currentPhase: "lessons" as const,
+          moduleId: module.id,
+        })
       );
-      return sends;
     }
-    return "generateModulesNode"; // Stay in modules until all are done
+    return "generateModulesNode"; // Wait for all modules to complete
   })
+
+  // After lessons: Check if ready for synthesis or stay in lessons
   .addConditionalEdges("generateLessonsNode", (state) => {
-    // After lessons, check if we should do synthesis
     if (allModulesHaveLockedLessons(state as CourseDesignState)) {
       return "synthesisNode";
     }
-    return "generateLessonsNode"; // Stay in lessons until all are done
+    return "generateLessonsNode"; // Wait for all lessons to complete
   })
+
+  // End after synthesis
   .addConditionalEdges("synthesisNode", () => END);
 
-// Compile with checkpointer
+/**
+ * Compiled workflow ready for execution.
+ * Includes checkpointer for state persistence.
+ */
 export const courseWorkflow = workflow.compile({ checkpointer });
 
-// Export checkpointer for setup
-export async function setupCheckpointer() {
+/**
+ * Initializes the checkpointer database tables.
+ * Call this once during application startup.
+ *
+ * @returns The configured checkpointer instance
+ */
+export async function setupCheckpointer(): Promise<PostgresSaver> {
   await checkpointer.setup();
   return checkpointer;
 }
 
-// Export workflow configuration for API routes
+/**
+ * Workflow configuration interface for LangGraph.
+ * Contains the thread ID for checkpoint lookup.
+ */
 export interface WorkflowConfig {
   configurable: {
+    /** Unique thread identifier for workflow state persistence */
     thread_id: string;
   };
 }
 
-export function createWorkflowConfig(threadId: string): WorkflowConfig {
-  return {
-    configurable: {
-      thread_id: threadId,
-    },
-  };
-}
+// Re-exported from workflow-helpers for backward compatibility and centralized config creation
+export { createWorkflowConfig } from "./workflow-helpers";

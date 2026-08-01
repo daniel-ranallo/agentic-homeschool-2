@@ -1,46 +1,12 @@
 "use client";
 
-import { Check, Lock, Edit2, Target, FileText, Layers, BookOpen, ChevronRight } from "lucide-react";
-import { NodeStatus, NodeType } from "@/lib/langgraph/state";
+import { Check, Lock, Edit2, ChevronRight, BookOpen, Target, FileText, Layers } from "lucide-react";
+import { NodeStatus, NodeType, WorkflowPhase, CLO, Assessment, Module, LessonPlan } from "@/lib/langgraph/state";
+import { WORKFLOW_PHASES, getPhaseConfig } from "@/lib/workflow-config";
 
-interface CLO {
-  id: string;
-  text: string;
-  bloomLevel: string;
-  approved: boolean;
-}
-
-interface Assessment {
-  id: string;
-  title: string;
-  description: string;
-  type: string;
-  closEvaluated: string[];
-  approved: boolean;
-}
-
-interface Module {
-  id: string;
-  title: string;
-  description: string;
-  topics: string[];
-  assessmentId: string;
-  approved: boolean;
-}
-
-interface LessonPlan {
-  id: string;
-  title: string;
-  duration: number;
-  objectives: string[];
-  hook: string;
-  directInstruction: string;
-  application: string;
-  wrapUp: string;
-  moduleId: string;
-  approved: boolean;
-}
-
+/**
+ * Course with full context for preview display.
+ */
 interface Course {
   id: string;
   title: string;
@@ -50,24 +16,24 @@ interface Course {
   threadId: string;
 }
 
+/**
+ * Props for the DocumentPreview component.
+ */
 interface DocumentPreviewProps {
+  /** Course to display in the preview */
   course: Course;
 }
 
-type Phase = "title" | "goals" | "assessments" | "modules" | "lessons" | "synthesis";
-
-const phases: Array<{ key: Phase; title: string; icon: any; description: string }> = [
-  { key: "title", title: "Course Title", icon: BookOpen, description: "Basic course information" },
-  { key: "goals", title: "Learning Outcomes", icon: Target, description: "Course Learning Outcomes (CLOs)" },
-  { key: "assessments", title: "Assessments", icon: FileText, description: "Summative Assessments & Capstones" },
-  { key: "modules", title: "Modules", icon: Layers, description: "Module breakdown per assessment" },
-  { key: "lessons", title: "Lesson Plans", icon: BookOpen, description: "Daily 50-minute lesson plans" },
-];
-
+/**
+ * Displays the course structure with phase progress indicators.
+ * Shows the current working phase and locked/completed sections.
+ *
+ * @param course - Course to display
+ */
 export function DocumentPreview({ course }: DocumentPreviewProps) {
   // Current phase is determined by what we're actively working on
   // For MVP, we start at "goals" phase since title is already set
-  const currentPhase: Phase = "goals";
+  const currentPhase: WorkflowPhase = "goals";
 
   const getPhaseStatus = (phaseKey: Phase): "complete" | "active" | "pending" => {
     if (phaseKey === currentPhase) return "active";
@@ -88,7 +54,7 @@ export function DocumentPreview({ course }: DocumentPreviewProps) {
         <div>
           <h2 className="text-lg font-semibold">Course Structure</h2>
           <p className="text-sm text-muted-foreground">
-            Working on: <span className="font-medium text-primary">{phases.find(p => p.key === currentPhase)?.title}</span>
+            Working on: <span className="font-medium text-primary">{WORKFLOW_PHASES.find(p => p.key === currentPhase)?.title}</span>
           </p>
         </div>
         <button
@@ -102,7 +68,7 @@ export function DocumentPreview({ course }: DocumentPreviewProps) {
 
       {/* Phase Progress Indicators */}
       <div className="flex items-center gap-2 mb-6 pb-4 border-b">
-        {phases.map((phase, index) => {
+        {WORKFLOW_PHASES.map((phase, index) => {
           const status = getPhaseStatus(phase.key);
           const Icon = phase.icon;
           return (
@@ -119,7 +85,7 @@ export function DocumentPreview({ course }: DocumentPreviewProps) {
                 <Icon className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">{phase.title}</span>
               </div>
-              {index < phases.length - 1 && (
+              {index < WORKFLOW_PHASES.length - 1 && (
                 <ChevronRight className="h-4 w-4 text-muted-foreground mx-1" />
               )}
             </div>
@@ -129,7 +95,7 @@ export function DocumentPreview({ course }: DocumentPreviewProps) {
 
       <div className="space-y-4">
         {/* Course Title - Always visible and complete */}
-        <div className={`p-4 rounded-lg border ${getPhaseStatus("title") === "complete" ? "bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800" : ""}`}>
+        <div className={`p-4 rounded-lg border ${getPhaseStatus("title") === "complete" ? "bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800" : "bg-muted"}`}>
           <div className="flex items-center gap-2 mb-2">
             <BookOpen className="h-4 w-4 text-green-600" />
             <h3 className="text-sm font-medium">Course Title</h3>

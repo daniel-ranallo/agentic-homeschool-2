@@ -1,6 +1,16 @@
 /**
  * LangGraph Node Implementations
- * Each node handles a phase of the backward design process with HITL interrupts
+ *
+ * Each node handles a phase of the backward design process with Human-in-the-Loop (HITL)
+ * interrupts for user approval. Nodes are designed to be idempotent and can be retried
+ * safely if interrupted.
+ *
+ * Workflow phases:
+ * 1. generateGoalsNode - Creates Course Learning Outcomes (CLOs)
+ * 2. generateAssessmentsNode - Creates summative assessments
+ * 3. generateModulesNode - Creates modules per assessment (parallel)
+ * 4. generateLessonsNode - Creates lesson plans per module (parallel)
+ * 5. synthesisNode - Global review of complete course design
  */
 
 import { interrupt, Command } from "@langchain/langgraph";
@@ -9,10 +19,10 @@ import { CourseDesignAnnotation, CLO, Assessment, Module, LessonPlan, NodeStatus
 import { createChatModelConfigured } from "../llm-adapter";
 
 /**
- * Generate system prompt for course design
+ * System prompt template for course design tasks.
+ * Provides the LLM with context about Backward Design methodology.
  */
-function getSystemPrompt(phase: string): string {
-  const basePrompt = `You are an expert curriculum designer specializing in Backward Design methodology.
+const BASE_SYSTEM_PROMPT = `You are an expert curriculum designer specializing in Backward Design methodology.
 
 Backward Design follows this flow:
 1. Course Title & Learning Outcomes (CLOs) - Define what students should know/do
@@ -27,22 +37,25 @@ Key principles:
 - Avoid redundancy across branches
 - Ensure prerequisite concepts are taught before advanced topics`;
 
-  const phasePrompts: Record<string, string> = {
-    goals: `Generate 3-5 high-level Course Learning Outcomes (CLOs) using Bloom's Taxonomy.
+/**
+ * Phase-specific instructions for the LLM.
+ */
+const PHASE_PROMPTS: Record<string, string> = {
+  goals: `Generate 3-5 high-level Course Learning Outcomes (CLOs) using Bloom's Taxonomy.
 Each CLO should be:
 - Measurable and specific
 - Use action verbs from Bloom's Taxonomy
 - Aligned with the course title and level
 Format each CLO with: id, text, bloomLevel (the taxonomy level), and a brief rationale.`,
 
-    assessments: `Generate 2-4 major summative assessments/capstones that evaluate the locked CLOs.
+  assessments: `Generate 2-4 major summative assessments/capstones that evaluate the locked CLOs.
 Each assessment should:
 - Directly measure one or more CLOs
 - Be appropriate for the course level
 - Include variety in assessment types (projects, exams, presentations, etc.)
 Format each assessment with: id, title, description, type, and closEvaluated (array of CLO IDs).`,
 
-    modules: `Generate a module breakdown for the specified assessment.
+  modules: `Generate a module breakdown for the specified assessment.
 IMPORTANT: This assessment focuses on specific goals. Other assessments (listed in sibling context) handle different goals - DO NOT duplicate content.
 Each module should:
 - Cover a coherent topic area within the assessment scope
@@ -50,7 +63,7 @@ Each module should:
 - Build logically from foundational to advanced concepts
 Format each module with: id, title, description, topics (array), and assessmentId.`,
 
-    lessons: `Generate daily 50-minute lesson plans for the specified module.
+  lessons: `Generate daily 50-minute lesson plans for the specified module.
 IMPORTANT: Stay within this module's scope. Other modules handle different topics.
 Each lesson should include:
 - Clear learning objectives for the day
@@ -60,15 +73,22 @@ Each lesson should include:
 - Wrap-up/assessment (5 min)
 Format each lesson with: id, title, duration, objectives, hook, directInstruction, application, wrapUp, and moduleId.`,
 
-    synthesis: `Review the complete course design for:
+  synthesis: `Review the complete course design for:
 - Redundancies across branches
 - Missing prerequisite concepts
 - Alignment between lessons and original CLOs
 - Logical flow and progression
 Provide specific recommendations for improvements.`,
-  };
+};
 
-  return `${basePrompt}\n\n${phasePrompts[phase] || ""}`;
+/**
+ * Creates a complete system prompt by combining base instructions with phase-specific guidance.
+ *
+ * @param phase - The current workflow phase
+ * @returns Complete system prompt for the LLM
+ */
+function getSystemPrompt(phase: string): string {
+  return `${BASE_SYSTEM_PROMPT}\n\n${PHASE_PROMPTS[phase] || ""}`;
 }
 
 /**
@@ -329,31 +349,52 @@ Please analyze this complete course design for:
 
 // ============ Parsing Helpers ============
 
+/**
+ * Parses LLM response text into structured CLO objects.
+ *
+ * Attempts to extract CLOs from numbered or bulleted list format.
+ * Falls back to a single default CLO if parsing fails.
+ *
+ * @param text - Raw LLM response text
+ * @returns Array of parsed CLO objects
+ */
 function parseCLOs(text: string): CLO[] {
-  // Simple parsing - in production, use more robust JSON parsing
   const lines = text.split("\n").filter(l => l.trim());
   const clos: CLO[] = [];
 
   lines.forEach((line, idx) => {
+    // Match numbered (1., 2.) or bulleted (*) list items
     const match = line.match(/^(?:\d+\.?\s*|\*\s*)?([^-\n]+)$/i);
     if (match) {
       clos.push({
         id: `clo-${idx + 1}`,
         text: match[1].trim(),
-        bloomLevel: "Apply", // Default, would be extracted in production
+        bloomLevel: "Apply", // Default - would be extracted from text in production
         approved: false,
       });
     }
   });
 
-  return clos.length > 0 ? clos : [{
-    id: "clo-1",
-    text: text.substring(0, 200),
-    bloomLevel: "Understand",
-    approved: false,
-  }];
+  // Fallback: return a single default CLO if parsing found nothing
+  if (clos.length === 0) {
+    return [{
+      id: "clo-1",
+      text: text.substring(0, 200),
+      bloomLevel: "Understand",
+      approved: false,
+    }];
+  }
+
+  return clos;
 }
 
+/**
+ * Parses LLM response text into structured Assessment objects.
+ *
+ * @param text - Raw LLM response text
+ * @param clos - Available CLOs to reference
+ * @returns Array of parsed Assessment objects
+ */
 function parseAssessments(text: string, clos: CLO[]): Assessment[] {
   const lines = text.split("\n").filter(l => l.trim());
   const assessments: Assessment[] = [];
@@ -362,7 +403,9 @@ function parseAssessments(text: string, clos: CLO[]): Assessment[] {
   let currentId = 0;
 
   lines.forEach(line => {
+    // Detect new assessment entry (numbered or bulleted)
     if (line.match(/^\d+\.?\s*|^-\s*/)) {
+      // Save previous assessment if exists
       if (currentAssessment.title) {
         assessments.push(currentAssessment as Assessment);
       }
@@ -376,24 +419,38 @@ function parseAssessments(text: string, clos: CLO[]): Assessment[] {
         approved: false,
       };
     } else if (currentAssessment.title) {
+      // Accumulate description text
       currentAssessment.description += " " + line;
     }
   });
 
+  // Don't forget the last assessment
   if (currentAssessment.title) {
     assessments.push(currentAssessment as Assessment);
   }
 
-  return assessments.length > 0 ? assessments : [{
-    id: "assessment-1",
-    title: "Capstone Project",
-    description: text.substring(0, 200),
-    type: "Project",
-    closEvaluated: clos.map(c => c.id),
-    approved: false,
-  }];
+  // Fallback: return a single default assessment if parsing found nothing
+  if (assessments.length === 0) {
+    return [{
+      id: "assessment-1",
+      title: "Capstone Project",
+      description: text.substring(0, 200),
+      type: "Project",
+      closEvaluated: clos.map(c => c.id),
+      approved: false,
+    }];
+  }
+
+  return assessments;
 }
 
+/**
+ * Parses LLM response text into structured Module objects.
+ *
+ * @param text - Raw LLM response text
+ * @param assessmentId - ID of the parent assessment
+ * @returns Array of parsed Module objects
+ */
 function parseModules(text: string, assessmentId: string): Module[] {
   const lines = text.split("\n").filter(l => l.trim());
   const modules: Module[] = [];
@@ -402,7 +459,9 @@ function parseModules(text: string, assessmentId: string): Module[] {
   let currentId = 0;
 
   lines.forEach(line => {
+    // Detect new module entry
     if (line.match(/^\d+\.?\s*|^-\s*Module/i)) {
+      // Save previous module if exists
       if (currentModule.title) {
         modules.push(currentModule as Module);
       }
@@ -416,6 +475,7 @@ function parseModules(text: string, assessmentId: string): Module[] {
         approved: false,
       };
     } else if (currentModule.title) {
+      // Bulleted lines are topics, others are description
       if (line.match(/^-?\s*/)) {
         currentModule.topics?.push(line.replace(/^-?\s*/, "").trim());
       } else {
@@ -424,20 +484,36 @@ function parseModules(text: string, assessmentId: string): Module[] {
     }
   });
 
+  // Don't forget the last module
   if (currentModule.title) {
     modules.push(currentModule as Module);
   }
 
-  return modules.length > 0 ? modules : [{
-    id: "module-1",
-    title: "Introduction",
-    description: text.substring(0, 200),
-    topics: ["Overview", "Key Concepts"],
-    assessmentId,
-    approved: false,
-  }];
+  // Fallback: return a single default module if parsing found nothing
+  if (modules.length === 0) {
+    return [{
+      id: "module-1",
+      title: "Introduction",
+      description: text.substring(0, 200),
+      topics: ["Overview", "Key Concepts"],
+      assessmentId,
+      approved: false,
+    }];
+  }
+
+  return modules;
 }
 
+/**
+ * Parses LLM response text into structured LessonPlan objects.
+ *
+ * Attempts to identify lesson sections (hook, instruction, application, wrap-up)
+ * by looking for section headers in the text.
+ *
+ * @param text - Raw LLM response text
+ * @param moduleId - ID of the parent module
+ * @returns Array of parsed LessonPlan objects
+ */
 function parseLessons(text: string, moduleId: string): LessonPlan[] {
   const lines = text.split("\n").filter(l => l.trim());
   const lessons: LessonPlan[] = [];
@@ -446,7 +522,9 @@ function parseLessons(text: string, moduleId: string): LessonPlan[] {
   let currentId = 0;
 
   lines.forEach(line => {
+    // Detect new lesson entry
     if (line.match(/^\d+\.?\s*|^-\s*Lesson|^Lesson\s*\d+/i)) {
+      // Save previous lesson if exists
       if (currentLesson.title) {
         lessons.push(currentLesson as LessonPlan);
       }
@@ -464,6 +542,7 @@ function parseLessons(text: string, moduleId: string): LessonPlan[] {
         approved: false,
       };
     } else if (currentLesson.title) {
+      // Try to identify lesson sections by keywords
       const lowerLine = line.toLowerCase();
       if (lowerLine.includes("hook") || lowerLine.includes("engagement")) {
         currentLesson.hook = line.split(":")[1] || line;
@@ -474,25 +553,32 @@ function parseLessons(text: string, moduleId: string): LessonPlan[] {
       } else if (lowerLine.includes("wrap") || lowerLine.includes("closure")) {
         currentLesson.wrapUp = line.split(":")[1] || line;
       } else if (line.match(/^-?\s*/)) {
+        // Bulleted items are objectives
         currentLesson.objectives?.push(line.replace(/^-?\s*/, "").trim());
       }
     }
   });
 
+  // Don't forget the last lesson
   if (currentLesson.title) {
     lessons.push(currentLesson as LessonPlan);
   }
 
-  return lessons.length > 0 ? lessons : [{
-    id: "lesson-1",
-    title: "Introduction to Topic",
-    duration: 50,
-    objectives: ["Understand key concepts"],
-    hook: "Brief introduction and motivation",
-    directInstruction: "Core concepts explanation",
-    application: "Practice exercises",
-    wrapUp: "Summary and Q&A",
-    moduleId,
-    approved: false,
-  }];
+  // Fallback: return a single default lesson if parsing found nothing
+  if (lessons.length === 0) {
+    return [{
+      id: "lesson-1",
+      title: "Introduction to Topic",
+      duration: 50,
+      objectives: ["Understand key concepts"],
+      hook: "Brief introduction and motivation",
+      directInstruction: "Core concepts explanation",
+      application: "Practice exercises",
+      wrapUp: "Summary and Q&A",
+      moduleId,
+      approved: false,
+    }];
+  }
+
+  return lessons;
 }
